@@ -26,10 +26,18 @@ func main() {
 		log.Fatalf("failed to instanciate gvk cache, err: %v", err)
 	}
 
+	err = setupCacheIndexes(cacheStores)
+	if err != nil {
+		log.Fatalf("failed to setup cache indexes, err: %v", err)
+	}
+
 	deploy := appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "deploy",
 			Namespace: "default",
+			Annotations: map[string]string{
+				dummyAnnotation: dummyAnnotationVal,
+			},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Template: corev1.PodTemplateSpec{
@@ -60,4 +68,46 @@ func main() {
 
 	result := equality.Semantic.DeepEqual(*cachedDeploy, deploy)
 	log.Println("these two structs are equal? => ", result)
+
+	deploys := appsv1.DeploymentList{}
+	err = cacheStores.List(&deploys, client.MatchingFields{
+		customIdx: dummyAnnotationVal,
+	})
+	if err != nil {
+		log.Fatalf("failed to list deployments, err: %v", err)
+	}
+
+	log.Printf("found %d deployments using custom index\n", len(deploys.Items))
+}
+
+const (
+	customIdx          = "my_custom_index"
+	dummyAnnotation    = "my.domain/label"
+	dummyAnnotationVal = "someval"
+)
+
+func setupCacheIndexes(stores CacheStores) error {
+	err := stores.IndexField(
+		&appsv1.Deployment{},
+		customIdx,
+		func(o client.Object) []string {
+			api, ok := o.(*appsv1.Deployment)
+			if !ok {
+				return nil
+			}
+
+			// parse dummy idx val
+			expectedVal := api.GetAnnotations()[dummyAnnotation]
+			if expectedVal == "" {
+				return nil
+			}
+
+			return []string{expectedVal}
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
